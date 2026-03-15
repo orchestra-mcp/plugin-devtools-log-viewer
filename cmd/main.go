@@ -13,12 +13,12 @@ import (
 
 func main() {
 	builder := plugin.New("devtools.log-viewer").
-		Version("0.1.0").
-		Description("Log file viewer and search tools").
+		Version("0.2.0").
+		Description("Log file viewer, search, and background process management tools").
 		Author("Orchestra").
 		Binary("devtools-log-viewer")
 
-	tp := &internal.ToolsPlugin{}
+	tp := internal.NewToolsPlugin()
 	tp.RegisterTools(builder)
 
 	p := builder.BuildWithTools()
@@ -31,6 +31,7 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
+		tp.KillAll()
 		cancel()
 	}()
 

@@ -6,7 +6,9 @@ import (
 )
 
 // Register adds all log viewer tools to the builder.
-func Register(builder *plugin.PluginBuilder) {
-	tp := &internal.ToolsPlugin{}
+// The returned function kills all managed background processes on shutdown.
+func Register(builder *plugin.PluginBuilder) func() {
+	tp := internal.NewToolsPlugin()
 	tp.RegisterTools(builder)
+	return tp.KillAll
 }
