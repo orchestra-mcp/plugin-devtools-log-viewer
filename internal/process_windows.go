@@ -1,3 +1,5 @@
+//go:build windows
+
 package internal
 
 import (
@@ -8,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -39,21 +40,18 @@ type ManagedProcess struct {
 	cancel context.CancelFunc
 }
 
-// IsRunning returns true if the process has not yet exited.
 func (p *ManagedProcess) IsRunning() bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.status == StatusRunning
 }
 
-// Status returns the current process status.
 func (p *ManagedProcess) Status() ProcessStatus {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.status
 }
 
-// UptimeSeconds returns wall-clock time since the process started.
 func (p *ManagedProcess) UptimeSeconds() float64 {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -64,7 +62,6 @@ func (p *ManagedProcess) UptimeSeconds() float64 {
 	return end.Sub(p.StartedAt).Seconds()
 }
 
-// ErrorString returns the error message if the process failed.
 func (p *ManagedProcess) ErrorString() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -74,44 +71,23 @@ func (p *ManagedProcess) ErrorString() string {
 	return ""
 }
 
-// Kill sends SIGTERM to the process group, waits 3 seconds, then SIGKILL.
+// Kill terminates the process on Windows.
 func (p *ManagedProcess) Kill() error {
 	p.mu.RLock()
 	if p.status != StatusRunning || p.Cmd == nil || p.Cmd.Process == nil {
 		p.mu.RUnlock()
 		return nil
 	}
-	pid := p.Cmd.Process.Pid
 	p.mu.RUnlock()
-
-	// SIGTERM to the process group (negative PID).
-	_ = syscall.Kill(-pid, syscall.SIGTERM)
-
-	done := make(chan struct{})
-	go func() {
-		_, _ = p.Cmd.Process.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		return nil
-	case <-time.After(3 * time.Second):
-		_ = syscall.Kill(-pid, syscall.SIGKILL)
-		<-done
-		return nil
-	}
+	return p.Cmd.Process.Kill()
 }
 
-// GenerateProcessID creates a short random ID like "proc-a1b2c3d4".
 func GenerateProcessID() string {
 	b := make([]byte, 4)
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("proc-%x", b)
 }
 
-// StartProcess launches a command in the background with combined stdout+stderr
-// captured into a ring buffer.
 func StartProcess(ctx context.Context, id, command, workDir string, bufSize int) *ManagedProcess {
 	if bufSize <= 0 {
 		bufSize = 1000
@@ -119,10 +95,9 @@ func StartProcess(ctx context.Context, id, command, workDir string, bufSize int)
 
 	childCtx, cancel := context.WithCancel(ctx)
 
-	cmd := exec.CommandContext(childCtx, "sh", "-c", command)
+	cmd := exec.CommandContext(childCtx, "cmd", "/C", command)
 	cmd.Dir = workDir
 	cmd.Env = os.Environ()
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	mp := &ManagedProcess{
 		ID:        id,
@@ -146,7 +121,7 @@ func StartProcess(ctx context.Context, id, command, workDir string, bufSize int)
 		cancel()
 		return mp
 	}
-	cmd.Stderr = cmd.Stdout // merge stderr into stdout pipe
+	cmd.Stderr = cmd.Stdout
 
 	if err := cmd.Start(); err != nil {
 		mp.mu.Lock()
@@ -161,7 +136,6 @@ func StartProcess(ctx context.Context, id, command, workDir string, bufSize int)
 
 	mp.PID = cmd.Process.Pid
 
-	// Scanner goroutine: reads lines and writes them to the ring buffer.
 	go func() {
 		scanner := bufio.NewScanner(stdoutPipe)
 		scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
@@ -170,7 +144,6 @@ func StartProcess(ctx context.Context, id, command, workDir string, bufSize int)
 		}
 	}()
 
-	// Waiter goroutine: updates status when the process exits.
 	go func() {
 		waitErr := cmd.Wait()
 		mp.mu.Lock()
